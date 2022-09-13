@@ -64,6 +64,21 @@ class Course extends WP_REST_Controller
                 'permission_callback' => array($this, 'get_item_permissions_check')
             )
         ));
+
+        register_rest_route($this->namespace, '/' . $this->rest_base . '/sections' . '/(?P<id>\d+)', array(
+            array(
+                'methods'             => WP_REST_Server::EDITABLE,
+                'callback'            => array($this, 'update_sections'),
+                'permission_callback' => array($this, 'create_item_permissions_check')
+            )
+        ));
+        register_rest_route($this->namespace, '/' . $this->rest_base . '/sections' . '/(?P<id>\d+)', array(
+            array(
+                'methods'             => WP_REST_Server::READABLE,
+                'callback'            => array($this, 'get_sections'),
+                'permission_callback' => array($this, 'get_item_permissions_check')
+            )
+        ));
     }
 
 
@@ -100,6 +115,127 @@ class Course extends WP_REST_Controller
         return new WP_REST_Response($taxs, 200);
     }
 
+    public function update_sections($request)
+    {
+        $params    = $request->get_params();
+        $course_id = $params['id'];
+
+        $sections = wp_slash(wp_json_encode(array_values($params['sections']), JSON_UNESCAPED_UNICODE));
+
+        update_post_meta($course_id, 'course_sections', $sections);
+
+        return new WP_REST_Response($this->get_sections_data($course_id), 200);
+    }
+
+    public function get_sections($request)
+    {
+        $params    = $request->get_params();
+        $course_id = $params['id'];
+        # code...
+        return new WP_REST_Response($this->learndash_get_course_data_builder($course_id), 200);
+    }
+
+
+    /**
+     * Gets the course data for the course builder.
+     *
+     * @since 3.4.0
+     *
+     * @param array $data The data passed down to the front-end.
+     *
+     * @return array The data passed down to the front-end.
+     */
+    function learndash_get_course_data_builder($course_id)
+    {
+
+        $data = [];
+        $output_lessons = array();
+        $sections       = array();
+
+        // Get a list of lessons to loop.
+        $lessons        = learndash_course_get_lessons(
+            $course_id,
+            array(
+                'return_type' => 'WP_Post',
+                'per_page'    => 0,
+            )
+        );
+        $output_lessons = array();
+
+        if ((is_array($lessons)) && (!empty($lessons))) {
+            // Loop course's lessons.
+            foreach ($lessons as $lesson_post) {
+                if (!is_a($lesson_post, 'WP_Post')) {
+                    continue;
+                }
+
+                // Output lesson with child tree.
+                $output_lessons[] = array(
+                    'ID'            => $lesson_post->ID,
+                    'expanded'      => false,
+                    'post_title'    => $lesson_post->post_title,
+                    'post_status'   => learndash_get_step_post_status_slug($lesson_post),
+                    'type'          => $lesson_post->post_type,
+                    'url'           => learndash_get_step_permalink($lesson_post->ID, $course_id),
+                    'edit_link'     => get_edit_post_link($lesson_post->ID, ''),
+                );
+            }
+        }
+
+        // Merge sections at Outline.
+        $sections_raw = get_post_meta($course_id, 'course_sections', true);
+        $sections     = !empty($sections_raw) ? json_decode($sections_raw) : array();
+
+        if ((is_array($sections)) && (!empty($sections))) {
+            foreach ($sections as $section) {
+                if (!is_object($section)) {
+                    continue;
+                }
+
+                if ((!property_exists($section, 'ID')) || (empty($section->ID))) {
+                    continue;
+                }
+
+                if (!property_exists($section, 'order')) {
+                    continue;
+                }
+
+                if ((!property_exists($section, 'post_title')) || (empty($section->post_title))) {
+                    continue;
+                }
+
+                if ((!property_exists($section, 'type')) || (empty($section->type))) {
+                    continue;
+                }
+
+                array_splice($output_lessons, (int) $section->order, 0, array($section));
+            }
+        }
+
+
+        // Output data.
+        $data['lessons'] = $output_lessons;
+        $data['sections'] =  $sections;
+
+        return $data;
+    }
+
+    /**
+     * Get sections data.
+     *
+     * @since 3.0.0
+     *
+     * @param int $course_id The course ID.
+     *
+     * @return object
+     */
+    public function get_sections_data($course_id)
+    {
+        $sections = get_post_meta($course_id, 'course_sections', true);
+
+        return $sections;
+    }
+
     public function create_item($request)
     {
         $params = $request->get_params();
@@ -120,12 +256,15 @@ class Course extends WP_REST_Controller
             'price_type' => 'closed',
             'price_type_closed_price' => !empty($params['price']) ?  $params['price'] : 0,
             'ld_course_category' => $params['category'],
-            'ld_course_tag' => $params['tag'],
             'author' => $user_id,
             'status' => !empty($params['status']) ? $params['status'] : 'publish',
-            'disable_content_table' =>  $params['disable_content_table'],
-            'featured_media' => !empty($params['featured_media']) ? $params['featured_media'] : ''
+            'disable_content_table' =>  $params['disable_content_table']
         ];
+
+
+        if (isset($params['featured_media']) && !empty($params['featured_media'])) {
+            $course_content['featured_media'] = $params['featured_media'];
+        }
 
         try {
 
@@ -184,7 +323,6 @@ class Course extends WP_REST_Controller
             }
 
             return new WP_REST_Response($apiBody);
-
         } catch (Error $e) {
             return new WP_REST_Response($e->getMessage(), 500);
         }
@@ -210,12 +348,14 @@ class Course extends WP_REST_Controller
             'price_type' => 'closed',
             'price_type_closed_price' => !empty($params['price']) ?  $params['price'] : 0,
             'ld_course_category' => $params['category'],
-            'ld_course_tag' => $params['tag'],
             'author' => $user_id,
             'status' => !empty($params['status']) ? $params['status'] : 'publish',
             'disable_content_table' =>  $params['disable_content_table'],
-            'featured_media' => !empty($params['featured_media']) ? $params['featured_media'] : ''
         ];
+
+        if (isset($params['featured_media']) && !empty($params['featured_media'])) {
+            $course_content['featured_media'] = $params['featured_media'];
+        }
 
         try {
 
@@ -235,6 +375,7 @@ class Course extends WP_REST_Controller
             if (403 === $status_code || $status_code === 500) {
                 return new WP_REST_Response(['message' => 'You do not have permission to'], 403);
             }
+
 
             $api_body = wp_remote_retrieve_body($api_response);
 
@@ -315,24 +456,21 @@ class Course extends WP_REST_Controller
                 'type'        => 'string',
                 'description' => __('A named status for the object. publish, future, draft, pending, private, graded, not_graded', 'portl'),
             ),
-            'featured_media' => array(
-                'required'    => false,
-                'type'        => 'string',
-                'description' => __('The ID of the featured media for the object.', 'portl'),
-            ),
+            // 'featured_media' => array(
+            //     'required'    => false,
+            //     'type'        => 'string',
+            //     'description' => __('The ID of the featured media for the object.', 'portl'),
+            // ),
             'category' => array(
                 'required'    => true,
-                'type'        => 'string',
                 'description' => __('The terms assigned to the object in the category taxonomy.', 'portl'),
             ),
-            'tag' => array(
-                'required'    => true,
-                'type'        => 'string',
-                'description' => __('The terms assigned to the object in the post_tag taxonomy.', 'portl'),
-            ),
+            // 'tag' => array(
+            //     'required'    => true,
+            //     'description' => __('The terms assigned to the object in the post_tag taxonomy.', 'portl'),
+            // ),
             'course_cover' => array(
                 'required'    => false,
-                'type'        => 'string',
                 'description' => __('Cover id', 'portl'),
             ),
             'course_video' => array(
