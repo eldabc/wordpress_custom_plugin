@@ -76,6 +76,22 @@ class Lesson extends WP_REST_Controller
                 )
             )
         );
+
+        register_rest_route(
+			$this->namespace,
+			'/' . $this->rest_base . '/(?P<id>[\d]+)',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'get_item' ),
+					'permission_callback' => array( $this, 'get_item_permissions_check' ),
+					'args'                => array(
+						'context' => $this->get_context_param( array( 'default' => 'view' ) ),
+					),
+				),
+				'schema' => array( $this, 'get_public_item_schema' ),
+			)
+		);
     }
 
 
@@ -438,4 +454,57 @@ class Lesson extends WP_REST_Controller
             ),
         );
     }
+
+    /**
+	 * Retrieve Lesson.
+	 *
+	 * @param WP_REST_Request $request Full details about the request.
+	 *
+	 * @return WP_REST_Response
+	 * @since          0.1.0
+	 *
+	 * @api            {GET} /wp-json/buddyboss-app/learndash/v1/lessons/:id Get LearnDash Lesson
+	 * @apiName        GetLDLesson
+	 * @apiGroup       LD Lessons
+	 * @apiDescription Retrieve single Lesson
+	 * @apiVersion     1.0.0
+	 * @apiPermission  LoggedInUser
+	 * @apiParam {Number} id A unique numeric ID for the Lesson.
+	 */
+	public function get_item( $request ) {
+		$lesson_id = is_numeric( $request ) ? $request : (int) $request['id'];
+		$lesson    = get_post( $lesson_id );
+
+		if ( empty( $lesson ) || $this->post_type !== $lesson->post_type ) {
+			return LessonsError::instance()->invalid_lesson_id();
+		}
+
+		/**
+		 * Fire after Lesson is fetched via Query.
+		 *
+		 * @param array           $lesson    Fetched lesson.
+		 * @param WP_REST_Request $lesson_id lesson id.
+		 *
+		 * @since 0.1.0
+		 */
+		$lesson = apply_filters( 'bbapp_ld_get_lesson', $lesson, $lesson_id );
+
+		$retval = $this->prepare_response_for_collection(
+			$this->prepare_item_for_response( $lesson, $request )
+		);
+
+		$response = rest_ensure_response( $retval );
+
+		/**
+		 * Fires after an lesson respose is prepared via the REST API.
+		 *
+		 * @param WP_REST_Response $response The response data.
+		 * @param WP_REST_Request  $request  The request sent to the API.
+		 *
+		 * @since 0.1.0
+		 */
+		do_action( 'bbapp_ld_lesson_item_response', $response, $request );
+
+		return $response;
+	}
 }
